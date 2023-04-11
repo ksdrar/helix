@@ -2170,7 +2170,18 @@ pub fn process_cmd(
     input: &str,
     event: PromptEvent,
 ) -> anyhow::Result<()> {
-    let input = expand_args(cx.editor, input);
+    let input: String = if event == PromptEvent::Validate {
+        match expand_args(cx.editor, input) {
+            Ok(expanded) => expanded,
+            Err(e) => {
+                cx.editor.set_error(format!("{}", e));
+                return Err(e);
+            }
+        }
+    } else {
+        input.to_owned()
+    };
+
     let parts = input.split_whitespace().collect::<Vec<&str>>();
     if parts.is_empty() {
         return Ok(());
@@ -2853,56 +2864,91 @@ pub(super) fn command_mode(cx: &mut Context) {
     cx.push_layer(Box::new(prompt));
 }
 
-fn expand_args<'a>(editor: &mut Editor, args: &'a str) -> Cow<'a, str> {
-    let reg = Regex::new(r"%(\w+)\s*\{(.*)").unwrap();
-    reg.replace(args, |caps: &regex::Captures| {
-        let remaining = &caps[2];
-        let end = find_first_open_right_braces(remaining);
-        let exp = expand_args(editor, &remaining[..end]);
-        let doc = doc!(editor);
-        let rep = match &caps[1] {
-            "val" => match exp.trim() {
-                "filename" => doc.path().and_then(|p| p.to_str()).unwrap_or("").to_owned(),
-                "dirname" => doc
-                    .path()
-                    .and_then(|p| p.parent())
-                    .and_then(|p| p.to_str())
-                    .unwrap_or("")
-                    .to_owned(),
-                _ => "".into(),
-            },
-            "sh" => {
-                let shell = &editor.config().shell;
-                if let Ok((output, _)) = shell_impl(shell, &exp, None) {
-                    output.trim().into()
-                } else {
-                    "".into()
+fn expand_args(editor: &mut Editor, args: &str) -> anyhow::Result<String> {
+    let variable_regex = Regex::new(r"#\{([a-zA-Z0-9_]+)\}").unwrap();
+    let command_regex = Regex::new(r"#(\w+)\s*\[(.+)\]").unwrap();
+    let (view, doc) = current!(editor);
+
+    let with_variables = replace_all(&variable_regex, args, |captures: &regex::Captures| {
+        let variable = captures.get(1).unwrap().as_str();
+
+        match variable {
+            "filename" => doc.path().and_then(|p| p.to_str()).map_or(
+                Err(anyhow::anyhow!("[expand_args] Current buffer has no path")),
+                |v| Ok(v.to_owned()),
+            ),
+            "filedir" => doc
+                .path()
+                .and_then(|p| p.parent())
+                .and_then(|p| p.to_str())
+                .map_or(
+                    Err(anyhow::anyhow!(
+                        "[expand_args] Current buffer has no path or parent"
+                    )),
+                    |v| Ok(v.to_owned()),
+                ),
+            "line_number" => Ok((doc
+                .selection(view.id)
+                .primary()
+                .cursor_line(doc.text().slice(..))
+                + 1)
+            .to_string()),
+            _ => anyhow::bail!("[expand_args] Unknown variable: {variable}"),
+        }
+    })?;
+
+    let with_commands = replace_all(
+        &command_regex,
+        &with_variables,
+        |captures: &regex::Captures| {
+            let command = captures.get(1).unwrap().as_str();
+            let body = captures.get(2).unwrap().as_str();
+
+            match command {
+                "sh" => {
+                    let shell = &editor.config().shell;
+
+                    let result = shell_impl(shell, body, None)?;
+
+                    Ok(result.0.trim().to_string())
                 }
+                _ => anyhow::bail!("[expand_args] Unknown command: {command}"),
             }
-            _ => "".into(),
-        };
-        let next = expand_args(editor, remaining.get(end + 1..).unwrap_or(""));
-        format!("{rep} {next}")
-    })
+        },
+    )?;
+
+    Ok(with_commands.to_string())
 }
 
-fn find_first_open_right_braces(str: &str) -> usize {
-    let mut left_count = 1;
-    for (i, &b) in str.as_bytes().iter().enumerate() {
-        match char::from_u32(b as u32) {
-            Some('}') => {
-                left_count -= 1;
-                if left_count == 0 {
-                    return i;
-                }
-            }
-            Some('{') => {
-                left_count += 1;
-            }
-            _ => {}
-        }
+// Copy of regex::Regex::replace_all to allow using result in the replacer function
+fn replace_all<'t>(
+    regex: &regex::Regex,
+    text: &'t str,
+    matcher: impl Fn(&regex::Captures) -> anyhow::Result<String>,
+) -> anyhow::Result<Cow<'t, str>> {
+    let mut it = regex.captures_iter(text).peekable();
+
+    if it.peek().is_none() {
+        return Ok(Cow::Borrowed(text));
     }
-    str.len()
+
+    let mut new = String::with_capacity(text.len());
+    let mut last_match = 0;
+
+    for cap in it {
+        let m = cap.get(0).unwrap();
+        new.push_str(&text[last_match..m.start()]);
+
+        let replace = matcher(&cap)?;
+
+        new.push_str(&replace);
+
+        last_match = m.end();
+    }
+
+    new.push_str(&text[last_match..]);
+
+    Ok(Cow::Owned(new))
 }
 
 fn argument_number_of(shellwords: &Shellwords) -> usize {
