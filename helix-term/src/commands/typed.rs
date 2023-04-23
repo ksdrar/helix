@@ -2867,71 +2867,59 @@ pub(super) fn command_mode(cx: &mut Context) {
 }
 
 fn expand_args(editor: &mut Editor, args: &str) -> anyhow::Result<String> {
-    let variable_regex = Regex::new(r"#\{([a-zA-Z0-9_]+)\}").unwrap();
-    let command_regex = Regex::new(r"#(\w+)\s*\[(.+)\]").unwrap();
+    let regexp = regex::Regex::new(r"%(\w+)\s*\{([^{}]*(\{[^{}]*\}[^{}]*)*)\}").unwrap();
+
+    let shell = &editor.config().shell;
     let (view, doc) = current!(editor);
 
-    let with_variables = replace_all(&variable_regex, args, |captures: &regex::Captures| {
-        let variable = captures.get(1).unwrap().as_str();
+    replace_all(&regexp, args, move |captures| {
+        let keyword = captures.get(1).unwrap().as_str();
+        let body = captures.get(2).unwrap().as_str();
 
-        match variable {
-            "filename" => doc.path().and_then(|p| p.to_str()).map_or(
-                Err(anyhow::anyhow!("[expand_args] Current buffer has no path")),
-                |v| Ok(v.to_owned()),
-            ),
-            "filedir" => doc
-                .path()
-                .and_then(|p| p.parent())
-                .and_then(|p| p.to_str())
-                .map_or(
-                    Err(anyhow::anyhow!(
-                        "[expand_args] Current buffer has no path or parent"
-                    )),
-                    |v| Ok(v.to_owned()),
-                ),
-            "line_number" => Ok((doc
-                .selection(view.id)
-                .primary()
-                .cursor_line(doc.text().slice(..))
-                + 1)
-            .to_string()),
-            _ => anyhow::bail!("[expand_args] Unknown variable: {variable}"),
-        }
-    })?;
+        match keyword.trim() {
+            "val" => match body.trim() {
+                "filename" => doc
+                    .path()
+                    .and_then(|p| p.to_str())
+                    .map_or(Err(anyhow::anyhow!("Current buffer has no path")), |v| {
+                        Ok(v.to_owned())
+                    }),
+                "filedir" => doc
+                    .path()
+                    .and_then(|p| p.parent())
+                    .and_then(|p| p.to_str())
+                    .map_or(
+                        Err(anyhow::anyhow!("Current buffer has no path or parent")),
+                        |v| Ok(v.to_owned()),
+                    ),
+                "line_number" => Ok((doc
+                    .selection(view.id)
+                    .primary()
+                    .cursor_line(doc.text().slice(..))
+                    + 1)
+                .to_string()),
+                _ => anyhow::bail!("Unknown variable: {body}"),
+            },
+            "sh" => {
+                let result = shell_impl(shell, body, None)?;
 
-    let with_commands = replace_all(
-        &command_regex,
-        &with_variables,
-        |captures: &regex::Captures| {
-            let command = captures.get(1).unwrap().as_str();
-            let body = captures.get(2).unwrap().as_str();
-
-            match command {
-                "sh" => {
-                    let shell = &editor.config().shell;
-
-                    let result = shell_impl(shell, body, None)?;
-
-                    Ok(result.0.trim().to_string())
-                }
-                _ => anyhow::bail!("[expand_args] Unknown command: {command}"),
+                Ok(result.0.trim().to_string())
             }
-        },
-    )?;
-
-    Ok(with_commands.to_string())
+            _ => anyhow::bail!("Unknown keyword {keyword}"),
+        }
+    })
 }
 
 // Copy of regex::Regex::replace_all to allow using result in the replacer function
-fn replace_all<'t>(
+fn replace_all(
     regex: &regex::Regex,
-    text: &'t str,
+    text: &str,
     matcher: impl Fn(&regex::Captures) -> anyhow::Result<String>,
-) -> anyhow::Result<Cow<'t, str>> {
+) -> anyhow::Result<String> {
     let mut it = regex.captures_iter(text).peekable();
 
     if it.peek().is_none() {
-        return Ok(Cow::Borrowed(text));
+        return Ok(String::from(text));
     }
 
     let mut new = String::with_capacity(text.len());
@@ -2950,7 +2938,7 @@ fn replace_all<'t>(
 
     new.push_str(&text[last_match..]);
 
-    Ok(Cow::Owned(new))
+    replace_all(regex, &new, matcher)
 }
 
 fn argument_number_of(shellwords: &Shellwords) -> usize {
