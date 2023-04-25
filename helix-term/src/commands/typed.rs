@@ -2866,11 +2866,12 @@ pub(super) fn command_mode(cx: &mut Context) {
     cx.push_layer(Box::new(prompt));
 }
 
-fn expand_args(editor: &mut Editor, args: &str) -> anyhow::Result<String> {
+fn expand_args(editor: &Editor, args: &str) -> anyhow::Result<String> {
     let regexp = regex::Regex::new(r"%(\w+)\s*\{([^{}]*(\{[^{}]*\}[^{}]*)*)\}").unwrap();
 
+    let view = editor.tree.get(editor.tree.focus);
+    let doc = editor.documents.get(&view.doc).unwrap();
     let shell = &editor.config().shell;
-    let (view, doc) = current!(editor);
 
     replace_all(&regexp, args, move |captures| {
         let keyword = captures.get(1).unwrap().as_str();
@@ -2901,7 +2902,7 @@ fn expand_args(editor: &mut Editor, args: &str) -> anyhow::Result<String> {
                 _ => anyhow::bail!("Unknown variable: {body}"),
             },
             "sh" => {
-                let result = shell_impl(shell, body, None)?;
+                let result = shell_impl(shell, &expand_args(editor, body)?, None)?;
 
                 Ok(result.0.trim().to_string())
             }
