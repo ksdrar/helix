@@ -38,6 +38,8 @@ pub struct CommandSignature {
 
     // All remaining arguments will use this completion method, if set.
     var_args: Completer,
+
+    show_variables: bool,
 }
 
 impl CommandSignature {
@@ -45,6 +47,7 @@ impl CommandSignature {
         Self {
             positional_args: &[],
             var_args: completers::none,
+            show_variables: false,
         }
     }
 
@@ -52,6 +55,7 @@ impl CommandSignature {
         Self {
             positional_args: completers,
             var_args: completers::none,
+            show_variables: false,
         }
     }
 
@@ -59,6 +63,23 @@ impl CommandSignature {
         Self {
             positional_args: &[],
             var_args: completer,
+            show_variables: false,
+        }
+    }
+
+    const fn positional_with_variables(completers: &'static [Completer]) -> Self {
+        Self {
+            positional_args: completers,
+            var_args: completers::none,
+            show_variables: true,
+        }
+    }
+
+    const fn all_with_variables(completer: Completer) -> Self {
+        Self {
+            positional_args: &[],
+            var_args: completer,
+            show_variables: true,
         }
     }
 }
@@ -2290,7 +2311,7 @@ pub const TYPABLE_COMMAND_LIST: &[TypableCommand] = &[
             aliases: &["o"],
             doc: "Open a file from disk into the current view.",
             fun: open,
-            signature: CommandSignature::all(completers::filename),
+            signature: CommandSignature::all_with_variables(completers::filename),
         },
         TypableCommand {
             name: "buffer-close",
@@ -2353,28 +2374,28 @@ pub const TYPABLE_COMMAND_LIST: &[TypableCommand] = &[
             aliases: &["w"],
             doc: "Write changes to disk. Accepts an optional path (:write some/path.txt)",
             fun: write,
-            signature: CommandSignature::positional(&[completers::filename]),
+            signature: CommandSignature::positional_with_variables(&[completers::filename]),
         },
         TypableCommand {
             name: "write!",
             aliases: &["w!"],
             doc: "Force write changes to disk creating necessary subdirectories. Accepts an optional path (:write! some/path.txt)",
             fun: force_write,
-            signature: CommandSignature::positional(&[completers::filename]),
+            signature: CommandSignature::positional_with_variables(&[completers::filename]),
         },
         TypableCommand {
             name: "write-buffer-close",
             aliases: &["wbc"],
             doc: "Write changes to disk and closes the buffer. Accepts an optional path (:write-buffer-close some/path.txt)",
             fun: write_buffer_close,
-            signature: CommandSignature::positional(&[completers::filename]),
+            signature: CommandSignature::positional_with_variables(&[completers::filename]),
         },
         TypableCommand {
             name: "write-buffer-close!",
             aliases: &["wbc!"],
             doc: "Force write changes to disk creating necessary subdirectories and closes the buffer. Accepts an optional path (:write-buffer-close! some/path.txt)",
             fun: force_write_buffer_close,
-            signature: CommandSignature::positional(&[completers::filename]),
+            signature: CommandSignature::positional_with_variables(&[completers::filename]),
         },
         TypableCommand {
             name: "new",
@@ -2383,7 +2404,7 @@ pub const TYPABLE_COMMAND_LIST: &[TypableCommand] = &[
             fun: new_file,
             // TODO: This seems to complete with a filename, but doesn't use that filename to
             //       set the path of the newly created buffer.
-            signature: CommandSignature::positional(&[completers::filename]),
+            signature: CommandSignature::positional_with_variables(&[completers::filename]),
         },
         TypableCommand {
             name: "format",
@@ -2428,14 +2449,14 @@ pub const TYPABLE_COMMAND_LIST: &[TypableCommand] = &[
             aliases: &["wq", "x"],
             doc: "Write changes to disk and close the current view. Accepts an optional path (:wq some/path.txt)",
             fun: write_quit,
-            signature: CommandSignature::positional(&[completers::filename]),
+            signature: CommandSignature::positional_with_variables(&[completers::filename]),
         },
         TypableCommand {
             name: "write-quit!",
             aliases: &["wq!", "x!"],
             doc: "Write changes to disk and close the current view forcefully. Accepts an optional path (:wq! some/path.txt)",
             fun: force_write_quit,
-            signature: CommandSignature::positional(&[completers::filename]),
+            signature: CommandSignature::positional_with_variables(&[completers::filename]),
         },
         TypableCommand {
             name: "write-all",
@@ -2582,7 +2603,7 @@ pub const TYPABLE_COMMAND_LIST: &[TypableCommand] = &[
             aliases: &["cd"],
             doc: "Change the current working directory.",
             fun: change_current_directory,
-            signature: CommandSignature::positional(&[completers::directory]),
+            signature: CommandSignature::positional_with_variables(&[completers::directory]),
         },
         TypableCommand {
             name: "show-directory",
@@ -2835,7 +2856,7 @@ pub const TYPABLE_COMMAND_LIST: &[TypableCommand] = &[
             aliases: &["sh"],
             doc: "Run a shell command",
             fun: run_shell_command,
-            signature: CommandSignature::all(completers::filename)
+            signature: CommandSignature::all_with_variables(completers::filename)
         },
        TypableCommand {
             name: "reset-diff-change",
@@ -2903,11 +2924,21 @@ pub(super) fn command_mode(cx: &mut Context) {
 
                 let argument_number = argument_number_of(&shellwords);
 
-                if let Some(completer) = TYPABLE_COMMAND_MAP
-                    .get(&words[0] as &str)
-                    .map(|tc| tc.completer_for_argument_number(argument_number))
-                {
-                    completer(editor, word)
+                if let Some(command) = TYPABLE_COMMAND_MAP.get(&words[0] as &str) {
+                    let completer = command.completer_for_argument_number(argument_number);
+                    let mut completer_results = completer(editor, word);
+
+                    let results = if command.signature.show_variables {
+                        let mut variables = completers::variables(editor, word);
+
+                        variables.append(&mut completer_results);
+
+                        variables
+                    } else {
+                        completer_results
+                    };
+
+                    results
                         .into_iter()
                         .map(|(range, file)| {
                             let file = shellwords::escape(file);

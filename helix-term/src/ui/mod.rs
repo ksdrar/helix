@@ -429,6 +429,28 @@ pub mod completers {
         })
     }
 
+    pub fn variables(_editor: &Editor, input: &str) -> Vec<Completion> {
+        let matcher = Matcher::default();
+
+        let mut matches: Vec<_> = helix_view::editor::EXPANSIONS
+            .iter()
+            .filter_map(|expansion| {
+                matcher
+                    .fuzzy_match(expansion, input)
+                    .map(|score| (expansion, score))
+            })
+            .collect();
+
+        matches.sort_unstable_by(|(name1, score1), (name2, score2)| {
+            (Reverse(*score1), name1).cmp(&(Reverse(*score2), name2))
+        });
+
+        matches
+            .iter()
+            .map(|(expansion, _)| ((0..), Cow::from(*expansion)))
+            .collect()
+    }
+
     #[derive(Copy, Clone, PartialEq, Eq)]
     enum FileMatch {
         /// Entry should be ignored
