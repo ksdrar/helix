@@ -500,6 +500,18 @@ impl Component for Prompt {
         })));
 
         match event {
+            ctrl!('.') => {
+                if let Ok(Cow::Owned(new_line)) =
+                    helix_view::editor::expand_variables(cx.editor, &self.line)
+                {
+                    self.line = new_line;
+
+                    let pos = self.eval_movement(Movement::EndOfLine);
+                    self.cursor = pos;
+
+                    self.recalculate_completion(cx.editor);
+                }
+            }
             ctrl!('c') | key!(Esc) => {
                 (self.callback_fn)(cx, &self.line, PromptEvent::Abort);
                 return close_fn;
