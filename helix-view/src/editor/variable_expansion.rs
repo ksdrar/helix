@@ -2,40 +2,88 @@ use std::borrow::Cow;
 
 use crate::Editor;
 
+pub static EXPANSIONS: once_cell::sync::Lazy<Vec<String>> = once_cell::sync::Lazy::new(|| {
+    let mut vec = Vec::with_capacity(VARIABLES.len() + 1);
+
+    for var in VARIABLES {
+        vec.push(format!("%val{{{}}}", var.name));
+    }
+
+    vec.sort_unstable();
+
+    vec.push("%sh{}".to_string());
+
+    vec
+});
+
+pub struct Variable {
+    name: &'static str,
+    fun: fn(&Editor) -> anyhow::Result<String>,
+}
+
+const VARIABLES: &[Variable] = &[
+    Variable {
+        name: "filename",
+        fun: filename,
+    },
+    Variable {
+        name: "dirname",
+        fun: dirname,
+    },
+    Variable {
+        name: "line_number",
+        fun: line_number,
+    },
+];
+
+fn filename(editor: &Editor) -> anyhow::Result<String> {
+    let (_, doc) = current_ref!(editor);
+
+    Ok(doc
+        .path()
+        .and_then(|it| it.to_str())
+        .unwrap_or(crate::document::SCRATCH_BUFFER_NAME)
+        .to_string())
+}
+
+fn dirname(editor: &Editor) -> anyhow::Result<String> {
+    let (_, doc) = current_ref!(editor);
+
+    doc.path()
+        .and_then(|p| p.parent())
+        .and_then(std::path::Path::to_str)
+        .map_or(
+            Err(anyhow::anyhow!("Current buffer has no path or parent")),
+            |v| Ok(v.to_string()),
+        )
+}
+
+fn line_number(editor: &Editor) -> anyhow::Result<String> {
+    let (view, doc) = current_ref!(editor);
+
+    Ok((doc
+        .selection(view.id)
+        .primary()
+        .cursor_line(doc.text().slice(..))
+        + 1)
+    .to_string())
+}
+
 static EXPAND_VARIABLES_REGEX: once_cell::sync::Lazy<helix_core::regex::Regex> =
     once_cell::sync::Lazy::new(|| {
         helix_core::regex::Regex::new(r"%(\w+)\{([^{}]*(\{[^{}]*\}[^{}]*)*)\}").unwrap()
     });
 
 pub fn expand_variables<'a>(editor: &Editor, input: &'a str) -> anyhow::Result<Cow<'a, str>> {
-    let (view, doc) = current_ref!(editor);
     let shell = &editor.config().shell;
 
     replace_all(
         &EXPAND_VARIABLES_REGEX,
         Cow::Borrowed(input),
         move |keyword, body| match keyword.trim() {
-            "val" => match body.trim() {
-                "filename" => Ok(doc
-                    .path()
-                    .and_then(|it| it.to_str())
-                    .unwrap_or(crate::document::SCRATCH_BUFFER_NAME)
-                    .to_string()),
-                "dirname" => doc
-                    .path()
-                    .and_then(|p| p.parent())
-                    .and_then(std::path::Path::to_str)
-                    .map_or(
-                        Err(anyhow::anyhow!("Current buffer has no path or parent")),
-                        |v| Ok(v.to_string()),
-                    ),
-                "line_number" => Ok((doc
-                    .selection(view.id)
-                    .primary()
-                    .cursor_line(doc.text().slice(..))
-                    + 1)
-                .to_string()),
-                _ => anyhow::bail!("Unknown variable: {body}"),
+            "val" => match VARIABLES.iter().find(|it| it.name == body) {
+                Some(Variable { fun, .. }) => fun(editor),
+                None => anyhow::bail!("Unknown variable: {body}"),
             },
             "sh" => tokio::task::block_in_place(move || {
                 helix_lsp::block_on(async move {

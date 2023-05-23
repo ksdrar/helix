@@ -1,5 +1,5 @@
 mod variable_expansion;
-pub use variable_expansion::expand_variables;
+pub use variable_expansion::*;
 
 use crate::{
     align_view,
