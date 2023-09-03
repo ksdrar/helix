@@ -578,11 +578,7 @@ mod tests {
                     MappableCommand::select_all,
                     MappableCommand::Typable {
                         name: "pipe".to_string(),
-                        args: vec!{
-                            "sed".to_string(),
-                            "-E".to_string(),
-                            "'s/\\s+$//g'".to_string()
-                        },
+                        args: String::from("sed -E 's/\\s+$//g'"),
                         doc: "".to_string(),
                     },
                 })

@@ -159,7 +159,7 @@ use helix_view::{align_view, Align};
 pub enum MappableCommand {
     Typable {
         name: String,
-        args: Vec<String>,
+        args: String,
         doc: String,
     },
     Static {
@@ -196,8 +196,6 @@ impl MappableCommand {
                         jobs: cx.jobs,
                         scroll: None,
                     };
-
-                    let args = args.join(" ");
 
                     match helix_view::editor::expand_variables(cx.editor, &args) {
                         Ok(args) => {
@@ -531,14 +529,14 @@ impl std::str::FromStr for MappableCommand {
     type Err = anyhow::Error;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
+        log::error!("MappableCommand::FromStr({})", s);
+
         if let Some(suffix) = s.strip_prefix(':') {
             let mut typable_command = suffix.split(' ').map(|arg| arg.trim());
             let name = typable_command
                 .next()
                 .ok_or_else(|| anyhow!("Expected typable command name"))?;
-            let args = typable_command
-                .map(|s| s.to_owned())
-                .collect::<Vec<String>>();
+            let args = String::from((&s[name.len() + 1..]).trim());
             typed::TYPABLE_COMMAND_MAP
                 .get(name)
                 .map(|cmd| MappableCommand::Typable {
@@ -2905,7 +2903,7 @@ pub fn command_palette(cx: &mut Context) {
                 MappableCommand::Typable {
                     name: cmd.name.to_owned(),
                     doc: cmd.doc.to_owned(),
-                    args: Vec::new(),
+                    args: String::new(),
                 }
             }));
 
