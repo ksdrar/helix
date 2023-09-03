@@ -120,14 +120,14 @@ pub fn diff<'doc>(
                 }
 
                 let (icon, style) = if hunk.is_pure_insertion() {
-                    ("▍", added)
+                    ("│", added)
                 } else if hunk.is_pure_removal() {
                     if !first_visual_line {
                         return None;
                     }
-                    ("▔", deleted)
+                    ("‾", deleted)
                 } else {
-                    ("▍", modified)
+                    ("│", modified)
                 };
 
                 write!(out, "{}", icon).unwrap();
